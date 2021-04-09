@@ -23,18 +23,25 @@ min() {
 SECONDS=0
 
 # General configuration
-stage=1              # Processes starts from the specified stage.
-stop_stage=10000     # Processes is stopped at the specified stage.
+#TODO
+stage=100              # Processes starts from the specified stage.
+stop_stage=100     # Processes is stopped at the specified stage.
 skip_data_prep=false # Skip data preparation stages.
 skip_train=false     # Skip training stages.
 skip_eval=false      # Skip decoding and evaluation stages.
 skip_upload=true     # Skip packing and uploading stages.
 ngpu=1               # The number of gpus ("0" uses cpu, otherwise use gpu).
 num_nodes=1          # The number of nodes.
-nj=32                # The number of parallel jobs.
-inference_nj=32      # The number of parallel jobs in decoding.
+#nj=32                # The number of parallel jobs.
+#inference_nj=32      # The number of parallel jobs in decoding.
+nj=8                # The number of parallel jobs.
+#inference_nj=8      # The number of parallel jobs in decoding.
+inference_nj=1      # The number of parallel jobs in decoding.
 gpu_inference=false  # Whether to perform gpu decoding.
-dumpdir=dump         # Directory to dump features.
+#TODO: test
+#dumpdir=dump         # Directory to dump features.
+#dumpdir=/workspace/ssd-asr/dumps/aishell/dump         # Directory to dump features.
+dumpdir=/workspace/ssd-asr/dumps/zhaoli/dump         # Directory to dump features.
 expdir=exp           # Directory to save experiments.
 python=python3       # Specify python to execute espnet commands.
 
@@ -79,6 +86,8 @@ word_vocab_size=10000 # Size of word vocabulary.
 # ASR model related
 asr_tag=       # Suffix to the result dir for asr model training.
 asr_exp=       # Specify the direcotry path for ASR experiment.
+#TODO
+#asr_exp=test
                # If this option is specified, asr_tag is ignored.
 asr_stats_dir= # Specify the direcotry path for ASR statistics.
 asr_config=    # Config for asr model training.
@@ -94,6 +103,8 @@ inference_args=   # Arguments for decoding, e.g., "--lm_weight 0.1".
                   # Note that it will overwrite args in inference config.
 inference_lm=valid.loss.ave.pth       # Language modle path for decoding.
 inference_asr_model=valid.acc.ave.pth # ASR model path for decoding.
+#TODO
+inference_asr_model=valid.acc.best.pth # ASR model path for decoding.
                                       # e.g.
                                       # inference_asr_model=train.loss.best.pth
                                       # inference_asr_model=3epoch.pth
@@ -378,6 +389,9 @@ if [ -z "${lm_exp}" ]; then
 fi
 
 
+# inference_tag:
+# {inference_config}_lm_lm_{lm_config}_{lang}_{token}_{inference_lm}_asr_model_{inference_asr_model}
+# {decode_asr_rnn}_lm_lm_{train_lm_transformer}_{zh}_{char}_{valid.loss.ave}_asr_model_{valid.acc.ave}
 if [ -z "${inference_tag}" ]; then
     if [ -n "${inference_config}" ]; then
         inference_tag="$(basename "${inference_config}" .yaml)"
@@ -400,25 +414,52 @@ if ! "${skip_data_prep}"; then
     if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
         log "Stage 1: Data preparation for data/${train_set}, data/${valid_set}, etc."
         # [Task dependent] Need to create data.sh for new corpus
-        local/data.sh ${local_data_opts}
+        #local/data.sh ${local_data_opts}
+        #local/data2.sh ${local_data_opts}
+        local/data3.sh ${local_data_opts}
+        exit
     fi
 
     if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
+        cur_data=data_aishell3
+        all_data=("data_aishell1" "data_aishell2" "data_aishell3")
+        final_data=data
+
+        # combine train and test for aishell3
+        #utils/combine_data.sh "$cur_data/${train_set}" $cur_data/train_old $cur_data/test
+        #exit
+
         if [ -n "${speed_perturb_factors}" ]; then
-           log "Stage 2: Speed perturbation: data/${train_set} -> data/${train_set}_sp"
+           log "Stage 2: Speed perturbation: $cur_data/${train_set} -> $cur_data/${train_set}_sp"
+           # 0.9 1.0 1.1
            for factor in ${speed_perturb_factors}; do
                if [[ $(bc <<<"${factor} != 1.0") == 1 ]]; then
-                   scripts/utils/perturb_data_dir_speed.sh "${factor}" "data/${train_set}" "data/${train_set}_sp${factor}"
-                   _dirs+="data/${train_set}_sp${factor} "
+                   scripts/utils/perturb_data_dir_speed.sh "${factor}" "$cur_data/${train_set}" "$cur_data/${train_set}_sp${factor}"
+                   _dirs+="$cur_data/${train_set}_sp${factor} "
                else
                    # If speed factor is 1, same as the original
-                   _dirs+="data/${train_set} "
+                   _dirs+="$cur_data/${train_set} "
                fi
            done
-           utils/combine_data.sh "data/${train_set}_sp" ${_dirs}
+           utils/combine_data.sh "$cur_data/${train_set}_sp" ${_dirs}
         else
            log "Skip stage 2: Speed perturbation"
         fi
+
+        if [ -n "${speed_perturb_factors}" ]; then
+            train_set_sp="${train_set}_sp"
+        fi
+        # add train_set_sp and train_set together for providing train_set/text for lm_train_text
+        for dset in "${train_set}" "${train_set_sp}" "${valid_set}" ${test_sets}; do
+            _dirs=
+            for each_data in ${all_data[@]}; do
+                if [ -d "$each_data/$dset" ]; then
+                    _dirs+="$each_data/$dset "
+                fi
+            done
+            utils/combine_data.sh "$final_data/$dset" ${_dirs}
+        done
+        exit
     fi
 
     if [ -n "${speed_perturb_factors}" ]; then
@@ -437,12 +478,16 @@ if ! "${skip_data_prep}"; then
             # If nothing is need, then format_wav_scp.sh does nothing:
             # i.e. the input file format and rate is same as the output.
 
+            #TODO :test
             for dset in "${train_set}" "${valid_set}" ${test_sets}; do
+            #for dset in {${test_sets},}; do
                 if [ "${dset}" = "${train_set}" ] || [ "${dset}" = "${valid_set}" ]; then
                     _suf="/org"
                 else
                     _suf=""
                 fi
+                # utils/copy_data_dir.sh --validate_opts --non-print data/train_sp dump/raw/org/train_sp
+                echo utils/copy_data_dir.sh --validate_opts --non-print data/"${dset}" "${data_feats}${_suf}/${dset}"
                 utils/copy_data_dir.sh --validate_opts --non-print data/"${dset}" "${data_feats}${_suf}/${dset}"
                 rm -f ${data_feats}${_suf}/${dset}/{segments,wav.scp,reco2file_and_channel}
                 _opts=
@@ -455,6 +500,7 @@ if ! "${skip_data_prep}"; then
                     _opts+="--segments data/${dset}/segments "
                 fi
                 # shellcheck disable=SC2086
+                # scripts/audio/format_wav_scp.sh --nj 8 --cmd run.pl --audio-format wav --fs 16k data/train_sp/wav.scp dump/raw/org/train_sp
                 scripts/audio/format_wav_scp.sh --nj "${nj}" --cmd "${train_cmd}" \
                     --audio-format "${audio_format}" --fs "${fs}" ${_opts} \
                     "data/${dset}/wav.scp" "${data_feats}${_suf}/${dset}"
@@ -520,6 +566,7 @@ if ! "${skip_data_prep}"; then
             log "Error: not supported: --feats_type ${feats_type}"
             exit 2
         fi
+        #exit
     fi
 
 
@@ -533,7 +580,8 @@ if ! "${skip_data_prep}"; then
             utils/copy_data_dir.sh --validate_opts --non-print "${data_feats}/org/${dset}" "${data_feats}/${dset}"
             cp "${data_feats}/org/${dset}/feats_type" "${data_feats}/${dset}/feats_type"
 
-            # Remove short utterances
+            # Remove short utterances 0.1~20
+            echo $min_wav_duration, $max_wav_duration
             _feats_type="$(<${data_feats}/${dset}/feats_type)"
             if [ "${_feats_type}" = raw ]; then
                 _fs=$(python3 -c "import humanfriendly as h;print(h.parse_size('${fs}'))")
@@ -583,9 +631,13 @@ if ! "${skip_data_prep}"; then
         done
 
         # shellcheck disable=SC2002
+        echo $lm_train_text
         cat ${lm_train_text} | awk ' { if( NF != 1 ) print $0; } ' > "${data_feats}/lm_train.txt"
+        #exit
     fi
 
+    # char
+    echo $token_type, $token_list, $use_word_lm
 
     if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
         if [ "${token_type}" = bpe ]; then
@@ -625,6 +677,7 @@ if ! "${skip_data_prep}"; then
 
             # The first symbol in token_list must be "<blank>" and the last must be also sos/eos:
             # 0 is reserved for CTC-blank for ASR and also used as ignore-index in the other task
+            # python3 -m espnet2.bin.tokenize_text --token_type char --input dump/raw/lm_train.txt --output data/zh_token_list/char/tokens.txt --non_linguistic_symbols none --field 2- --cleaner none --g2p none --write_vocabulary true --add_symbol <blank>:0 --add_symbol <unk>:1 --add_symbol <sos/eos>:-1
             ${python} -m espnet2.bin.tokenize_text  \
                 --token_type "${token_type}" \
                 --input "${data_feats}/lm_train.txt" --output "${token_list}" ${_opts} \
@@ -656,6 +709,7 @@ if ! "${skip_data_prep}"; then
                 --add_symbol "${oov}:1" \
                 --add_symbol "${sos_eos}:-1"
         fi
+        #exit
 
     fi
 else
@@ -690,6 +744,8 @@ if ! "${skip_train}"; then
                 split_scps+=" ${_logdir}/train.${n}.scp"
             done
             # shellcheck disable=SC2086
+            # dump/raw/lm_train.txt
+            echo key_file_train, $key_file
             utils/split_scp.pl "${key_file}" ${split_scps}
 
             key_file="${lm_dev_text}"
@@ -698,9 +754,13 @@ if ! "${skip_train}"; then
                 split_scps+=" ${_logdir}/dev.${n}.scp"
             done
             # shellcheck disable=SC2086
+            # dump/raw/dev/text
+            echo key_file_dev, $key_file
             utils/split_scp.pl "${key_file}" ${split_scps}
 
             # 2. Generate run.sh
+            # exp/lm_stats_zh_char
+            echo stat with logdir, $lm_stats_dir
             log "Generate '${lm_stats_dir}/run.sh'. You can resume the process from stage 6 using this script"
             mkdir -p "${lm_stats_dir}"; echo "${run_args} --stage 6 \"\$@\"; exit \$?" > "${lm_stats_dir}/run.sh"; chmod +x "${lm_stats_dir}/run.sh"
 
@@ -709,6 +769,23 @@ if ! "${skip_train}"; then
             # NOTE: --*_shape_file doesn't require length information if --batch_type=unsorted,
             #       but it's used only for deciding the sample ids.
             # shellcheck disable=SC2086
+            # run.pl JOB=1:8 exp/lm_stats_zh_char/logdir/stats.JOB.log python3 -m espnet2.bin.lm_train --collect_stats true --use_preprocessor true --bpemodel none --token_type char --token_list data/zh_token_list/char/tokens.txt --non_linguistic_symbols none --cleaner none --g2p none --train_data_path_and_name_and_type dump/raw/lm_train.txt,text,text --valid_data_path_and_name_and_type dump/raw/dev/text,text,text --train_shape_file exp/lm_stats_zh_char/logdir/train.JOB.scp --valid_shape_file exp/lm_stats_zh_char/logdir/dev.JOB.scp --output_dir exp/lm_stats_zh_char/logdir/stats.JOB --config conf/train_lm_transformer.yaml
+            echo ${train_cmd} JOB=1:"${_nj}" "${_logdir}"/stats.JOB.log \
+                ${python} -m espnet2.bin.lm_train \
+                    --collect_stats true \
+                    --use_preprocessor true \
+                    --bpemodel "${bpemodel}" \
+                    --token_type "${lm_token_type}"\
+                    --token_list "${lm_token_list}" \
+                    --non_linguistic_symbols "${nlsyms_txt}" \
+                    --cleaner "${cleaner}" \
+                    --g2p "${g2p}" \
+                    --train_data_path_and_name_and_type "${data_feats}/lm_train.txt,text,text" \
+                    --valid_data_path_and_name_and_type "${lm_dev_text},text,text" \
+                    --train_shape_file "${_logdir}/train.JOB.scp" \
+                    --valid_shape_file "${_logdir}/dev.JOB.scp" \
+                    --output_dir "${_logdir}/stats.JOB" \
+                    ${_opts} ${lm_args}
             ${train_cmd} JOB=1:"${_nj}" "${_logdir}"/stats.JOB.log \
                 ${python} -m espnet2.bin.lm_train \
                     --collect_stats true \
@@ -732,6 +809,7 @@ if ! "${skip_train}"; then
                 _opts+="--input_dir ${_logdir}/stats.${i} "
             done
             # shellcheck disable=SC2086
+            # python3 /workspace/espnet/espnet2/bin/aggregate_stats_dirs.py --input_dir exp/lm_stats_zh_char/logdir/stats.1 --input_dir exp/lm_stats_zh_char/logdir/stats.2 --input_dir exp/lm_stats_zh_char/logdir/stats.3 --input_dir exp/lm_stats_zh_char/logdir/stats.4 --input_dir exp/lm_stats_zh_char/logdir/stats.5 --input_dir exp/lm_stats_zh_char/logdir/stats.6 --input_dir exp/lm_stats_zh_char/logdir/stats.7 --input_dir exp/lm_stats_zh_char/logdir/stats.8 --output_dir exp/lm_stats_zh_char
             ${python} -m espnet2.bin.aggregate_stats_dirs ${_opts} --output_dir "${lm_stats_dir}"
 
             # Append the num-tokens at the last dimensions. This is used for batch-bins count
@@ -795,6 +873,10 @@ if ! "${skip_train}"; then
             fi
 
             # shellcheck disable=SC2086
+            # log: exp/lm_train_lm_transformer_zh_char/train.log
+            # python3 /workspace/espnet/espnet2/bin/launch.py --cmd 'run.pl --name exp/lm_train_lm_transformer_zh_char/train.log' --log exp/lm_train_lm_transformer_zh_char/train.log --ngpu 1 --num_nodes 1 --init_file_prefix exp/lm_train_lm_transformer_zh_char/.dist_init_ --multiprocessing_distributed true --
+            # python3 -m espnet2.bin.lm_train --ngpu 1 --use_preprocessor true --bpemodel none --token_type char --token_list data/zh_token_list/char/tokens.txt --non_linguistic_symbols none --cleaner none --g2p none --valid_data_path_and_name_and_type dump/raw/dev/text,text,text --valid_shape_file exp/lm_stats_zh_char/valid/text_shape.char --fold_length 150 --resume true --output_dir exp/lm_train_lm_transformer_zh_char --config conf/train_lm_transformer.yaml --train_data_path_and_name_and_type dump/raw/lm_train.txt,text,text --train_shape_file exp/lm_stats_zh_char/train/text_shape.char
+            # We only get the shape after the stat collection
             ${python} -m espnet2.bin.launch \
                 --cmd "${cuda_cmd} --name ${jobname}" \
                 --log "${lm_exp}"/train.log \
@@ -817,16 +899,21 @@ if ! "${skip_train}"; then
                     --resume true \
                     --output_dir "${lm_exp}" \
                     ${_opts} ${lm_args}
+            #exit
 
         fi
 
 
         if [ ${stage} -le 8 ] && [ ${stop_stage} -ge 8 ]; then
+            # dump/raw/dev/text
             log "Stage 8: Calc perplexity: ${lm_test_text}"
             _opts=
             # TODO(kamo): Parallelize?
+            # exp/lm_train_lm_transformer_zh_char
             log "Perplexity calculation started... log: '${lm_exp}/perplexity_test/lm_calc_perplexity.log'"
             # shellcheck disable=SC2086
+            # run.pl --gpu 1 exp/lm_train_lm_transformer_zh_char/perplexity_test/lm_calc_perplexity.log
+            # python3 -m espnet2.bin.lm_calc_perplexity --ngpu 1 --data_path_and_name_and_type dump/raw/dev/text,text,text --train_config exp/lm_train_lm_transformer_zh_char/config.yaml --model_file exp/lm_train_lm_transformer_zh_char/valid.loss.ave.pth --output_dir exp/lm_train_lm_transformer_zh_char/perplexity_test
             ${cuda_cmd} --gpu "${ngpu}" "${lm_exp}"/perplexity_test/lm_calc_perplexity.log \
                 ${python} -m espnet2.bin.lm_calc_perplexity \
                     --ngpu "${ngpu}" \
@@ -835,7 +922,9 @@ if ! "${skip_train}"; then
                     --model_file "${lm_exp}/${inference_lm}" \
                     --output_dir "${lm_exp}/perplexity_test" \
                     ${_opts}
+            # 49.82319815732807
             log "PPL: ${lm_test_text}: $(cat ${lm_exp}/perplexity_test/ppl)"
+            #exit
 
         fi
 
@@ -865,6 +954,7 @@ if ! "${skip_train}"; then
                 # "sound" supports "wav", "flac", etc.
                 _type=sound
             fi
+            # 16k
             _opts+="--frontend_conf fs=${fs} "
         else
             _scp=feats.scp
@@ -874,6 +964,8 @@ if ! "${skip_train}"; then
         fi
 
         # 1. Split the key file
+        # asr_stats_dir: exp/asr_stats_raw_zh_char_sp
+        echo asr_stats_dir: $asr_stats_dir
         _logdir="${asr_stats_dir}/logdir"
         mkdir -p "${_logdir}"
 
@@ -881,6 +973,8 @@ if ! "${skip_train}"; then
         _nj=$(min "${nj}" "$(<${_asr_train_dir}/${_scp} wc -l)" "$(<${_asr_valid_dir}/${_scp} wc -l)")
 
         key_file="${_asr_train_dir}/${_scp}"
+        # asr train key: dump/raw/train_sp/wav.scp. It's wav not text
+        echo asr train key: $key_file
         split_scps=""
         for n in $(seq "${_nj}"); do
             split_scps+=" ${_logdir}/train.${n}.scp"
@@ -889,6 +983,8 @@ if ! "${skip_train}"; then
         utils/split_scp.pl "${key_file}" ${split_scps}
 
         key_file="${_asr_valid_dir}/${_scp}"
+        # asr valid key: dump/raw/dev/wav.scp
+        echo asr valid key: $key_file
         split_scps=""
         for n in $(seq "${_nj}"); do
             split_scps+=" ${_logdir}/valid.${n}.scp"
@@ -901,13 +997,32 @@ if ! "${skip_train}"; then
         mkdir -p "${asr_stats_dir}"; echo "${run_args} --stage 9 \"\$@\"; exit \$?" > "${asr_stats_dir}/run.sh"; chmod +x "${asr_stats_dir}/run.sh"
 
         # 3. Submit jobs
+        # exp/asr_stats_raw_zh_char_sp/logdir/stats.*.log
         log "ASR collect-stats started... log: '${_logdir}/stats.*.log'"
 
         # NOTE: --*_shape_file doesn't require length information if --batch_type=unsorted,
         #       but it's used only for deciding the sample ids.
 
         # shellcheck disable=SC2086
-        ${train_cmd} JOB=1:"${_nj}" "${_logdir}"/stats.JOB.log \
+        # python3 -m espnet2.bin.asr_train --collect_stats true --use_preprocessor true --bpemodel none --token_type char --token_list data/zh_token_list/char/tokens.txt --non_linguistic_symbols none --cleaner none --g2p none --train_data_path_and_name_and_type dump/raw/train_sp/wav.scp,speech,sound --train_data_path_and_name_and_type dump/raw/train_sp/text,text,text --valid_data_path_and_name_and_type dump/raw/dev/wav.scp,speech,sound --valid_data_path_and_name_and_type dump/raw/dev/text,text,text --train_shape_file exp/asr_stats_raw_zh_char_sp/logdir/train.JOB.scp --valid_shape_file exp/asr_stats_raw_zh_char_sp/logdir/valid.JOB.scp --output_dir exp/asr_stats_raw_zh_char_sp/logdir/stats.JOB --config conf/train_asr_conformer.yaml --frontend_conf fs=16k
+        echo ${python} -m espnet2.bin.asr_train \
+            --collect_stats true \
+            --use_preprocessor true \
+            --bpemodel "${bpemodel}" \
+            --token_type "${token_type}" \
+            --token_list "${token_list}" \
+            --non_linguistic_symbols "${nlsyms_txt}" \
+            --cleaner "${cleaner}" \
+            --g2p "${g2p}" \
+            --train_data_path_and_name_and_type "${_asr_train_dir}/${_scp},speech,${_type}" \
+            --train_data_path_and_name_and_type "${_asr_train_dir}/text,text,text" \
+            --valid_data_path_and_name_and_type "${_asr_valid_dir}/${_scp},speech,${_type}" \
+            --valid_data_path_and_name_and_type "${_asr_valid_dir}/text,text,text" \
+            --train_shape_file "${_logdir}/train.JOB.scp" \
+            --valid_shape_file "${_logdir}/valid.JOB.scp" \
+            --output_dir "${_logdir}/stats.JOB" \
+            ${_opts} ${asr_args}
+         ${train_cmd} JOB=1:"${_nj}" "${_logdir}"/stats.JOB.log \
             ${python} -m espnet2.bin.asr_train \
                 --collect_stats true \
                 --use_preprocessor true \
@@ -925,6 +1040,7 @@ if ! "${skip_train}"; then
                 --valid_shape_file "${_logdir}/valid.JOB.scp" \
                 --output_dir "${_logdir}/stats.JOB" \
                 ${_opts} ${asr_args} || { cat "${_logdir}"/stats.1.log; exit 1; }
+        # watch -d -n 0.5 "find exp/asr_stats_raw_zh_char_sp/logdir/ -name 'stat*log' -exec tail -1 {} \;"
 
         # 4. Aggregate shape files
         _opts=
@@ -932,6 +1048,7 @@ if ! "${skip_train}"; then
             _opts+="--input_dir ${_logdir}/stats.${i} "
         done
         # shellcheck disable=SC2086
+        # python3 -m espnet2.bin.aggregate_stats_dirs --input_dir exp/asr_stats_raw_zh_char_sp/logdir/stats.1 --input_dir exp/asr_stats_raw_zh_char_sp/logdir/stats.2 --input_dir exp/asr_stats_raw_zh_char_sp/logdir/stats.3 --input_dir exp/asr_stats_raw_zh_char_sp/logdir/stats.4 --input_dir exp/asr_stats_raw_zh_char_sp/logdir/stats.5 --input_dir exp/asr_stats_raw_zh_char_sp/logdir/stats.6 --input_dir exp/asr_stats_raw_zh_char_sp/logdir/stats.7 --input_dir exp/asr_stats_raw_zh_char_sp/logdir/stats.8 --output_dir exp/asr_stats_raw_zh_char_sp
         ${python} -m espnet2.bin.aggregate_stats_dirs ${_opts} --output_dir "${asr_stats_dir}"
 
         # Append the num-tokens at the last dimensions. This is used for batch-bins count
@@ -942,6 +1059,11 @@ if ! "${skip_train}"; then
         <"${asr_stats_dir}/valid/text_shape" \
             awk -v N="$(<${token_list} wc -l)" '{ print $0 "," N }' \
             >"${asr_stats_dir}/valid/text_shape.${token_type}"
+        # results after aggregation: text_shape, text_shape.char, speech_shape, feats_stats.npz, feats_lengths_stats.npz
+        # npz: count, sum, sum_square
+        # feat_stats: 67946592, [80], [80]
+        # feat_lengths_stats: 120098, 67946592, 41907974506
+        #exit
     fi
 
 
@@ -1028,6 +1150,9 @@ if ! "${skip_train}"; then
         fi
 
         # shellcheck disable=SC2086
+        # python3 -m espnet2.bin.launch --cmd run.pl --name exp/asr_train_asr_conformer_raw_zh_char_sp/train.log --log exp/asr_train_asr_conformer_raw_zh_char_sp/train.log --ngpu 1 --num_nodes 1 --init_file_prefix exp/asr_train_asr_conformer_raw_zh_char_sp/.dist_init_ --multiprocessing_distributed true --
+        # python3 -m espnet2.bin.asr_train --use_preprocessor true --bpemodel none --token_type char --token_list data/zh_token_list/char/tokens.txt --non_linguistic_symbols none --cleaner none --g2p none --valid_data_path_and_name_and_type dump/raw/dev/wav.scp,speech,sound --valid_data_path_and_name_and_type dump/raw/dev/text,text,text --valid_shape_file exp/asr_stats_raw_zh_char_sp/valid/speech_shape --valid_shape_file exp/asr_stats_raw_zh_char_sp/valid/text_shape.char --resume true --fold_length 51200 --fold_length 150 --output_dir exp/asr_train_asr_conformer_raw_zh_char_sp --config conf/train_asr_conformer.yaml --frontend_conf fs=16k --normalize=global_mvn --normalize_conf stats_file=exp/asr_stats_raw_zh_char_sp/train/feats_stats.npz --train_data_path_and_name_and_type dump/raw/train_sp/wav.scp,speech,sound --train_data_path_and_name_and_type dump/raw/train_sp/text,text,text --train_shape_file exp/asr_stats_raw_zh_char_sp/train/speech_shape --train_shape_file exp/asr_stats_raw_zh_char_sp/train/text_shape.char
+        #TODO
         ${python} -m espnet2.bin.launch \
             --cmd "${cuda_cmd} --name ${jobname}" \
             --log "${asr_exp}"/train.log \
@@ -1047,11 +1172,31 @@ if ! "${skip_train}"; then
                 --valid_data_path_and_name_and_type "${_asr_valid_dir}/text,text,text" \
                 --valid_shape_file "${asr_stats_dir}/valid/speech_shape" \
                 --valid_shape_file "${asr_stats_dir}/valid/text_shape.${token_type}" \
-                --resume true \
+                --resume false \
                 --fold_length "${_fold_length}" \
                 --fold_length "${asr_text_fold_length}" \
                 --output_dir "${asr_exp}" \
                 ${_opts} ${asr_args}
+            echo ${python} -m espnet2.bin.asr_train \
+                --use_preprocessor true \
+                --bpemodel "${bpemodel}" \
+                --token_type "${token_type}" \
+                --token_list "${token_list}" \
+                --non_linguistic_symbols "${nlsyms_txt}" \
+                --cleaner "${cleaner}" \
+                --g2p "${g2p}" \
+                --valid_data_path_and_name_and_type "${_asr_valid_dir}/${_scp},speech,${_type}" \
+                --valid_data_path_and_name_and_type "${_asr_valid_dir}/text,text,text" \
+                --valid_shape_file "${asr_stats_dir}/valid/speech_shape" \
+                --valid_shape_file "${asr_stats_dir}/valid/text_shape.${token_type}" \
+                --resume false \
+                --fold_length "${_fold_length}" \
+                --fold_length "${asr_text_fold_length}" \
+                --output_dir "${asr_exp}" \
+                --num_workers 1 \
+                --ngpu 1 \
+                ${_opts} ${asr_args}
+        exit
 
     fi
 else
@@ -1122,6 +1267,8 @@ if ! "${skip_eval}"; then
         mkdir -p "${asr_exp}/${inference_tag}"; echo "${run_args} --stage 11 \"\$@\"; exit \$?" > "${asr_exp}/${inference_tag}/run.sh"; chmod +x "${asr_exp}/${inference_tag}/run.sh"
 
         for dset in ${test_sets}; do
+            # data_feats: dump/raw, asr_exp: exp/asr_train_asr_conformer_raw_zh_char_sp, inference_tag: decode_asr_rnn_lm_lm_train_lm_transformer_zh_char_valid.loss.ave_asr_model_valid.acc.ave, dset:dev
+            echo data_feats: $data_feats, asr_exp: $asr_exp, inference_tag: $inference_tag, dset:$dset
             _data="${data_feats}/${dset}"
             _dir="${asr_exp}/${inference_tag}/${dset}"
             _logdir="${_dir}/logdir"
@@ -1148,11 +1295,24 @@ if ! "${skip_eval}"; then
                 split_scps+=" ${_logdir}/keys.${n}.scp"
             done
             # shellcheck disable=SC2086
+            # utils/split_scp.pl dump/raw/dev/wav.scp exp/asr_train_asr_conformer_raw_zh_char_sp/decode_asr_rnn_lm_lm_train_lm_transformer_zh_char_valid.loss.ave_asr_model_valid.acc.ave/dev/logdir/keys.JOB.scp 
+            echo utils/split_scp.pl "${key_file}" ${split_scps}
             utils/split_scp.pl "${key_file}" ${split_scps}
 
             # 2. Submit decoding jobs
             log "Decoding started... log: '${_logdir}/asr_inference.*.log'"
             # shellcheck disable=SC2086
+            # run.pl --gpu 0 JOB=1:8 exp/asr_train_asr_conformer_raw_zh_char_sp/decode_asr_rnn_lm_lm_train_lm_transformer_zh_char_valid.loss.ave_asr_model_valid.acc.ave/dev/logdir/asr_inference.JOB.log
+            # python3 -m espnet2.bin.asr_inference --ngpu 0 --data_path_and_name_and_type dump/raw/dev/wav.scp,speech,sound --key_file exp/asr_train_asr_conformer_raw_zh_char_sp/decode_asr_rnn_lm_lm_train_lm_transformer_zh_char_valid.loss.ave_asr_model_valid.acc.ave/dev/logdir/keys.JOB.scp --asr_train_config exp/asr_train_asr_conformer_raw_zh_char_sp/config.yaml --asr_model_file exp/asr_train_asr_conformer_raw_zh_char_sp/valid.acc.ave.pth --output_dir exp/asr_train_asr_conformer_raw_zh_char_sp/decode_asr_rnn_lm_lm_train_lm_transformer_zh_char_valid.loss.ave_asr_model_valid.acc.ave/dev/logdir/output.JOB --config conf/decode_asr_rnn.yaml --lm_train_config exp/lm_train_lm_transformer_zh_char/config.yaml --lm_file exp/lm_train_lm_transformer_zh_char/valid.loss.ave.pth
+            echo ${_cmd} --gpu "${_ngpu}" JOB=1:"${_nj}" "${_logdir}"/asr_inference.JOB.log \
+                ${python} -m espnet2.bin.asr_inference \
+                    --ngpu "${_ngpu}" \
+                    --data_path_and_name_and_type "${_data}/${_scp},speech,${_type}" \
+                    --key_file "${_logdir}"/keys.JOB.scp \
+                    --asr_train_config "${asr_exp}"/config.yaml \
+                    --asr_model_file "${asr_exp}"/"${inference_asr_model}" \
+                    --output_dir "${_logdir}"/output.JOB \
+                    ${_opts} ${inference_args}
             ${_cmd} --gpu "${_ngpu}" JOB=1:"${_nj}" "${_logdir}"/asr_inference.JOB.log \
                 ${python} -m espnet2.bin.asr_inference \
                     --ngpu "${_ngpu}" \
@@ -1162,14 +1322,28 @@ if ! "${skip_eval}"; then
                     --asr_model_file "${asr_exp}"/"${inference_asr_model}" \
                     --output_dir "${_logdir}"/output.JOB \
                     ${_opts} ${inference_args}
+            #TODO
+            echo ${python} -m espnet2.bin.asr_inference \
+                    --ngpu "${_ngpu}" \
+                    --data_path_and_name_and_type "${_data}/${_scp},speech,${_type}" \
+                    --key_file "${_logdir}"/keys.1.scp \
+                    --asr_train_config "${asr_exp}"/config.yaml \
+                    --asr_model_file "${asr_exp}"/"${inference_asr_model}" \
+                    --output_dir "${_logdir}"/output.1 \
+                    ${_opts} ${inference_args}
+            # watch -d -n 0.5 "find exp/asr_train_asr_conformer_raw_zh_char_sp/decode_asr_rnn_lm_lm_train_lm_transformer_zh_char_valid.loss.ave_asr_model_valid.acc.ave/dev/logdir/ -name 'asr_inference*log' -exec tail -1 {} \;"
 
             # 3. Concatenates the output files from each jobs
+            #TODO
+            # cat exp/asr_train_asr_conformer_raw_zh_char_sp/decode_asr_rnn_lm_lm_train_lm_transformer_zh_char_valid.loss.ave_asr_model_valid.acc.ave/dev/logdir/output.JOB/1best_recog/xxx to exp/asr_train_asr_conformer_raw_zh_char_sp/decode_asr_rnn_lm_lm_train_lm_transformer_zh_char_valid.loss.ave_asr_model_valid.acc.ave/dev/xxx
+            echo cat "${_logdir}/output.JOB/1best_recog/xxx" to ${_dir}/xxx
             for f in token token_int score text; do
                 for i in $(seq "${_nj}"); do
                     cat "${_logdir}/output.${i}/1best_recog/${f}"
                 done | LC_ALL=C sort -k1 >"${_dir}/${f}"
             done
         done
+        exit
     fi
 
 
@@ -1286,6 +1460,8 @@ if ! "${skip_eval}"; then
         scripts/utils/show_asr_result.sh "${asr_exp}" > "${asr_exp}"/RESULTS.md
         cat "${asr_exp}"/RESULTS.md
 
+        exit
+
     fi
 else
     log "Skip the evaluation stages"
@@ -1381,3 +1557,213 @@ else
 fi
 
 log "Successfully finished. [elapsed=${SECONDS}s]"
+
+in_scp=data_zhaoli/test/wav.scp
+scp_start=1
+scp_end=-1
+in_folder=
+
+dumpdir=/workspace/ssd-asr/dumps/zhaoli/dump         # Directory to dump features.
+gpu_inference=true
+lm_config=conf/train_lm_transformer.yaml
+inference_lm=valid.loss.ave.pth       # Language modle path for decoding.
+use_lm=true
+use_word_lm=false
+lang=zh
+lm_token_type=char
+lm_tag=
+lm_args=
+lm_exp=
+asr_config=conf/train_asr_conformer.yaml
+inference_asr_model=valid.acc.best.pth # ASR model path for decoding.
+asr_tag=
+feats_type=raw       # Feature type (raw or fbank_pitch).
+audio_format=wav
+speed_perturb_factors="0.9 1.0 1.1"
+inference_config=conf/decode_asr_rnn.yaml
+inference_tag=
+if [ -z "${lm_tag}" ]; then
+    if [ -n "${lm_config}" ]; then
+        lm_tag="$(basename "${lm_config}" .yaml)"
+    else
+        lm_tag="train"
+    fi
+    if [ "${lang}" != noinfo ]; then
+        lm_tag+="_${lang}_${lm_token_type}"
+    else
+        lm_tag+="_${lm_token_type}"
+    fi
+    if [ "${lm_token_type}" = bpe ]; then
+        lm_tag+="${nbpe}"
+    fi
+    # Add overwritten arg's info
+    if [ -n "${lm_args}" ]; then
+        lm_tag+="$(echo "${lm_args}" | sed -e "s/--/\_/g" -e "s/[ |=/]//g")"
+    fi
+fi
+if [ -z "${lm_exp}" ]; then
+    lm_exp="exp/lm_${lm_tag}"
+fi
+
+if [ -z "${asr_tag}" ]; then
+    if [ -n "${asr_config}" ]; then
+        asr_tag="$(basename "${asr_config}" .yaml)_${feats_type}"
+    else
+        asr_tag="train_${feats_type}"
+    fi
+    if [ "${lang}" != noinfo ]; then
+        asr_tag+="_${lang}_${token_type}"
+    else
+        asr_tag+="_${token_type}"
+    fi
+    if [ "${token_type}" = bpe ]; then
+        asr_tag+="${nbpe}"
+    fi
+    # Add overwritten arg's info
+    if [ -n "${asr_args}" ]; then
+        asr_tag+="$(echo "${asr_args}" | sed -e "s/--/\_/g" -e "s/[ |=/]//g")"
+    fi
+    if [ -n "${speed_perturb_factors}" ]; then
+        asr_tag+="_sp"
+    fi
+fi
+if [ -z "${asr_exp}" ]; then
+    asr_exp="exp/asr_${asr_tag}"
+fi
+
+if [ -z "${inference_tag}" ]; then
+    if [ -n "${inference_config}" ]; then
+        inference_tag="$(basename "${inference_config}" .yaml)"
+    else
+        inference_tag=inference
+    fi
+    # Add overwritten arg's info
+    if [ -n "${inference_args}" ]; then
+        inference_tag+="$(echo "${inference_args}" | sed -e "s/--/\_/g" -e "s/[ |=]//g")"
+    fi
+    if "${use_lm}"; then
+        inference_tag+="_lm_$(basename "${lm_exp}")_$(echo "${inference_lm}" | sed -e "s/\//_/g" -e "s/\.[^.]*$//g")"
+    fi
+    inference_tag+="_asr_model_$(echo "${inference_asr_model}" | sed -e "s/\//_/g" -e "s/\.[^.]*$//g")"
+fi
+
+# Check feature type
+if [ "${feats_type}" = raw ]; then
+    data_feats=${dumpdir}/raw
+elif [ "${feats_type}" = fbank_pitch ]; then
+    data_feats=${dumpdir}/fbank_pitch
+elif [ "${feats_type}" = fbank ]; then
+    data_feats=${dumpdir}/fbank
+elif [ "${feats_type}" == extracted ]; then
+    data_feats=${dumpdir}/extracted
+else
+    log "${help_message}"
+    log "Error: not supported: --feats_type ${feats_type}"
+    exit 2
+fi
+
+echo data_feats: /workspace/ssd-asr/dumps/zhaoli/dump/raw, asr_exp: exp/asr_train_asr_conformer_raw_zh_char_sp, lm_exp: exp/lm_train_lm_transformer_zh_char, inference_tag: decode_asr_rnn_lm_lm_train_lm_transformer_zh_char_valid.loss.ave_asr_model_valid.acc.best
+echo data_feats: $data_feats, asr_exp: $asr_exp, lm_exp: $lm_exp, inference_tag: $inference_tag
+
+if [ ${stage} -le 100 ] && [ ${stop_stage} -ge 100 ]; then
+    log "Stage 100: Singlre Inference: training_dir=${asr_exp}"
+
+    if ${gpu_inference}; then
+        #_cmd="${cuda_cmd}"
+        _ngpu=1
+    else
+        #_cmd="${decode_cmd}"
+        _ngpu=0
+    fi
+
+    _opts=
+    if [ -n "${inference_config}" ]; then
+        _opts+="--config ${inference_config} "
+    fi
+    if "${use_lm}"; then
+        if "${use_word_lm}"; then
+            _opts+="--word_lm_train_config ${lm_exp}/config.yaml "
+            _opts+="--word_lm_file ${lm_exp}/${inference_lm} "
+        else
+            _opts+="--lm_train_config ${lm_exp}/config.yaml "
+            _opts+="--lm_file ${lm_exp}/${inference_lm} "
+        fi
+    fi
+
+    for dset in ${test_sets}; do
+        _data="${data_feats}/${dset}"
+        _dir="${asr_exp}/${inference_tag}/${dset}"
+        _logdir="${_dir}/logdir"
+        mkdir -p "${_logdir}"
+
+        _feats_type="$(<${_data}/feats_type)"
+        if [ "${_feats_type}" = raw ]; then
+            _scp=wav.scp
+            if [[ "${audio_format}" == *ark* ]]; then
+                _type=kaldi_ark
+            else
+                _type=sound
+            fi
+        else
+            _scp=feats.scp
+            _type=kaldi_ark
+        fi
+
+        # two ways: 1. given wav.scp and range, 2. given a folder
+        # 1. Split the key file
+        #key_file=${_data}/${_scp}
+        key_file=${_logdir}/inference.scp
+        txt_file=${_logdir}/inference.txt
+        if [ -n "${in_scp}" ]; then
+            if [ ${scp_start} -gt ${scp_end} -a ${scp_end} -ne -1 ]; then
+                echo invalid scp range, ${scp_start} - ${scp_end}
+                exit 2
+            fi
+            if [ ${scp_end} -eq -1 ]; then
+                scp_end=$(wc -l ${in_scp} | awk '{print $1}')
+            fi
+            headn=${scp_end}
+            echo ${scp_end} ${scp_start}
+            tailn=$((${scp_end}-${scp_start}+1))
+            head -${headn} ${in_scp} | tail -${tailn} > ${key_file}
+            head -${headn} $(dirname ${in_scp})/text | tail -${tailn} > ${txt_file}
+        elif [ -n "${in_folder}" ]; then
+            find ${in_folder} -iname "*.wav" > ${_logdir}/inference.flist
+            sed -e 's/\.wav//' ${_logdir}/inference.flist | awk -F '/' '{print $NF, $0}' > ${key_file}
+            cat $(dirname ${in_folder})/text > ${txt_file}
+            rm ${_logdir}/inference.flist
+        else
+            echo "Error: no input file"
+            exit 2
+        fi
+
+        # 2. Submit decoding jobs
+        log "Decoding started..."
+        # shellcheck disable=SC2086
+        echo python3 -m espnet2.bin.asr_inference --ngpu 0 \
+            --data_path_and_name_and_type dump/raw/dev/wav.scp,speech,sound \
+            --key_file exp/asr_train_asr_conformer_raw_zh_char_sp/decode_asr_rnn_lm_lm_train_lm_transformer_zh_char_valid.loss.ave_asr_model_valid.acc.ave/dev/logdir/keys.JOB.scp \
+            --asr_train_config exp/asr_train_asr_conformer_raw_zh_char_sp/config.yaml \
+            --asr_model_file exp/asr_train_asr_conformer_raw_zh_char_sp/valid.acc.ave.pth \
+            --output_dir exp/asr_train_asr_conformer_raw_zh_char_sp/decode_asr_rnn_lm_lm_train_lm_transformer_zh_char_valid.loss.ave_asr_model_valid.acc.ave/dev/logdir/output.JOB \
+            --config conf/decode_asr_rnn.yaml --lm_train_config exp/lm_train_lm_transformer_zh_char/config.yaml --lm_file exp/lm_train_lm_transformer_zh_char/valid.loss.ave.pth
+        ${python} -m espnet2.bin.asr_inference \
+                --ngpu "${_ngpu}" \
+                --data_path_and_name_and_type "${key_file},speech,${_type}" \
+                --key_file ${key_file} \
+                --asr_train_config "${asr_exp}"/config.yaml \
+                --asr_model_file "${asr_exp}"/"${inference_asr_model}" \
+                --output_dir "${_logdir}"/inference_output \
+                ${_opts} ${inference_args}
+
+        #res_file=exp/asr_train_asr_conformer_raw_zh_char_sp/decode_asr_rnn_lm_lm_train_lm_transformer_zh_char_valid.loss.ave_asr_model_valid.acc.best/test/logdir/inference_output/1best_recog/text
+        res_file=${_logdir}/inference_output/1best_recog/text
+        score_file=${_logdir}/inference_output/1best_recog/score
+        paste -d ' ' <(cat ${key_file}) <(cat ${txt_file} | awk '{print $2}') <(cat ${res_file} | awk '{print $2}') <(cat ${score_file} | awk '{print $2}') > ${_logdir}/inference_output/text_score_combined
+        #for f in token token_int score text; do
+        #    cat "${_logdir}/inference_output/1best_recog/${f}" > "${_dir}/${f}"
+        #done
+
+
+    done
+fi

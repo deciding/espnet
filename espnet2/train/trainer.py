@@ -579,6 +579,7 @@ class Trainer:
                     grad_norm = torch.tensor(grad_norm)
 
                 if not torch.isfinite(grad_norm):
+                    import pdb;pdb.set_trace()
                     logging.warning(
                         f"The grad norm is {grad_norm}. Skipping updating the model."
                     )

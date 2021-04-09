@@ -1,7 +1,10 @@
 # Set the path of your corpus
 # "downloads" means the corpus can be downloaded by the recipe automatically
 
-AISHELL=downloads
+#AISHELL=downloads
+AISHELL=/workspace/ssd-asr/aishell1
+AISHELL2=/workspace/ssd-asr/aishell2
+AISHELL3=/workspace/ssd-asr/aishell3
 AN4=downloads
 DIRHA_ENGLISH_PHDEV=
 DIRHA_WSJ=

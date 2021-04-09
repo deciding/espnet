@@ -209,9 +209,13 @@ def main():
                     else:
                         if args.fs is not None and args.fs != rate:
                             # FIXME(kamo): To use sox?
-                            wave = resampy.resample(
-                                wave.astype(np.float64), rate, args.fs, axis=0
-                            )
+                            try:
+                                wave = resampy.resample(
+                                    wave.astype(np.float64), rate, args.fs, axis=0
+                                )
+                            except Exception as e:
+                                print('false file: '+wavpath)
+                                raise e
                             wave = wave.astype(np.int16)
                             rate = args.fs
 
